@@ -1,0 +1,244 @@
+using System;
+using System.Data;
+using System.Configuration;
+using System.Collections;
+using System.Web;
+using System.Web.Security;
+using System.Web.UI;
+using System.Web.UI.WebControls;
+using System.Web.UI.WebControls.WebParts;
+using System.Web.UI.HtmlControls;
+using System.Data.SqlClient;
+
+public partial class Controls_UserLogin : System.Web.UI.UserControl
+{
+    
+    protected void OnLoggedIn(object sender, EventArgs e)
+    {
+
+       Response.Redirect("~/Login.aspx");
+        
+    }
+    protected void LoginUser_Authenticate(object sender, AuthenticateEventArgs e)
+    {
+
+            String adPath = ConfigurationManager.AppSettings["LDAPPath"].ToString();
+       
+            FormsAuth.LdapAuthentication adAuth = new FormsAuth.LdapAuthentication(adPath);
+           
+           try
+
+            {
+                
+           if (true == adAuth.IsAuthenticated("MMT", LoginUser.UserName, LoginUser.Password))
+                {
+                    //if ad authentication succeeds check for app specific permission 
+
+                    CheckUser();
+                    // check device from which application is called added by esha on 02-04-2016
+                    string userAgent = Request.UserAgent.ToString().ToLower();
+                    if (userAgent != null)
+                    {
+                        if (!((userAgent.Contains("mobile")) || (userAgent.Contains("tablet"))))
+                        {
+                            Session["DeviceType"] = "Desktop";
+
+                        }
+                        else
+                        {
+                            Session["DeviceType"] = "Mobile";
+                        }
+                                   
+                        
+                    }
+
+               }
+               else 
+                {
+                   LoginUser.FailureText = "Incorrect login/password entered.";
+
+
+                }
+            }
+            catch (Exception ex)
+            {
+                LoginUser.FailureText = "Error authenticating. " + ex.Message;
+            }
+ 
+
+    }
+    private void CheckUser()
+    {
+        string strConString = ConfigurationManager.AppSettings["ConnectionMMTLiveCRM"];
+        SqlConnection sqlcon= new SqlConnection(strConString);
+        SqlCommand cmd_getData = new SqlCommand();
+       
+        SqlDataReader reader;
+        string strUrl = string.Empty;
+        cmd_getData.Connection = sqlcon;
+        cmd_getData.CommandType = CommandType.StoredProcedure;
+        cmd_getData.CommandText = ConfigurationManager.AppSettings["usp_getuserinfo"].ToString();
+        cmd_getData.Parameters.Add("@loginname", SqlDbType.NVarChar);
+        cmd_getData.Parameters["@loginname"].Value = this.LoginUser.UserName.ToLower();
+
+        try
+        {
+            sqlcon.Open();
+            reader = cmd_getData.ExecuteReader();
+            
+            bool read = reader.HasRows;
+            if (read)
+            {
+                reader.Read();
+                string AgentName = reader["AgentName"].ToString();
+                string Vertical = reader["Vertical"].ToString().Trim();
+                string IsSupervisor = reader["IsSupervisor"].ToString();
+                string IsAdmin = reader["IsAdmin"].ToString();
+                string IsSpoc = reader["IsSpoc"].ToString();
+                string IsLeadRM = reader["IsLeadRM"].ToString();
+                string IsOpsMgr = reader["IsOpsMgr"].ToString();
+                string IsProjectRM = reader["IsProjectRM"].ToString(); //Phase 3
+                string IsAgent = reader["IsAgent"].ToString();
+                string EmailID = reader["EmailID"].ToString();
+                string Roles = reader["RoleName"].ToString();  // added by esha on  16-09-2015 bug 195080
+                string IsMentor = reader["IsMentor"].ToString();
+                string MentorID = reader["MentorID"].ToString();
+                (Session)["IsMentor"] = IsMentor;
+                (Session)["MentorID"] = MentorID;
+                (Session)["AgentName"] = AgentName;
+                (Session)["EmailID"] = EmailID;
+                (Session)["Vertical"] = Vertical;
+                (Session)["IsSupervisor"] = IsSupervisor;
+                (Session)["IsAdmin"] = IsAdmin;
+                (Session)["IsSpoc"] = IsSpoc;
+                (Session)["IsLeadRM"] = IsLeadRM;
+                (Session)["IsOpsMgr"] = IsOpsMgr;
+                (Session)["IsProjectRM"] = IsProjectRM;
+                (Session)["IsAgent"] = IsAgent;
+                (Session)["ID"] = this.LoginUser.UserName;
+                (Session)["fromdate"] = "0";
+                (Session)["todate"] = "0";
+                (Session)["RoleName"] = Roles;    // added by esha on 16-09-2015 bug 195080
+                //changed by tanu  02-06-2014 starts
+                if (IsMentor == "True")
+                {
+                    HolidayExpert.Global.AgentFollowUP = false;
+                    strUrl = "~//MentorSelfView.aspx";
+                }
+                else if (IsAgent=="False" && Roles!="CMU")
+                {
+                    strUrl = "~//Supervisor.aspx";
+                }
+                else if (Roles!="CMU")
+                {
+                    HolidayExpert.Global.AgentFollowUP = false;
+                    strUrl = "~//agent.aspx";
+                }
+                else 
+                {
+                    strUrl = "~//CMU.aspx";
+                }
+                //chnaged by tanu  02-06-2014 ends
+                SqlConnection con = new SqlConnection(strConString);
+
+                con.Open();
+                string query = "INSERT INTO Tbl_CRM_HEAgentsLogs(LoginTime,AgentLoginId) VALUES (@LoginTime,@AgentLoginId)";
+                SqlCommand cmd = new SqlCommand();
+                cmd.Connection = con;
+                cmd.Parameters.AddWithValue("@LoginTime", DateTime.Now);
+                cmd.Parameters.AddWithValue("@AgentLoginId", this.LoginUser.UserName);
+                cmd.CommandText = query;
+                cmd.ExecuteNonQuery();
+                con.Close();
+
+
+                this.CreateCookies(strUrl);
+                read = false;
+                reader.Close();
+            }
+            else
+            {
+                LoginUser.FailureText = "You don't have Permission! Please contact your supervisor.";
+            }
+
+        }
+
+
+        catch (Exception ex)
+        {
+
+            throw ex;
+        }
+        finally
+        {
+            sqlcon.Close();
+        }
+    }
+
+
+    protected void CreateCookies(string url)
+    {
+
+        String groups = "";
+        //Create the ticket, and add the groups.
+        bool isCookiePersistent = true;
+
+        FormsAuthenticationTicket authTicket = new FormsAuthenticationTicket(1, LoginUser.UserName,
+        DateTime.Now, DateTime.Now.AddMinutes(60), isCookiePersistent, groups);
+
+   
+
+        //Encrypt the ticket.
+        String encryptedTicket = FormsAuthentication.Encrypt(authTicket);
+
+        //Create a cookie, and then add the encrypted ticket to the cookie as data.
+        HttpCookie authCookie = new HttpCookie(FormsAuthentication.FormsCookieName, encryptedTicket);
+
+
+        if (true == isCookiePersistent)
+            authCookie.Expires = authTicket.Expiration;
+
+        //Add the cookie to the outgoing cookies collection.
+        Response.Cookies.Add(authCookie);
+
+        HttpCookie cookie = new HttpCookie("UserID", LoginUser.UserName);
+        Response.Cookies.Add(cookie);
+        SetLogin();
+
+        //You can redirect now.
+
+        Response.Redirect(url, false);
+
+    }
+
+
+    private void SetLogin()
+    {
+        string strConString = ConfigurationManager.AppSettings["ConnectionMMTLiveCRM"];
+        SqlConnection sqlcon_setlogin = new SqlConnection(strConString);
+        SqlCommand cmd_setLoggedIn = new SqlCommand();
+        cmd_setLoggedIn.CommandType = CommandType.StoredProcedure;
+        cmd_setLoggedIn.CommandText = ConfigurationManager.AppSettings["usp_setloginstatus"].ToString();
+        cmd_setLoggedIn.Parameters.Add("@loginid", SqlDbType.NVarChar);
+        cmd_setLoggedIn.Parameters["@loginid"].Value = this.LoginUser.UserName.ToLower();
+        cmd_setLoggedIn.Connection = sqlcon_setlogin;
+        try
+        {
+            sqlcon_setlogin.Open();
+            cmd_setLoggedIn.ExecuteNonQuery();
+        }
+        catch (Exception exsetlogin)
+        {
+            throw exsetlogin;   
+        }
+        finally
+        {
+            sqlcon_setlogin.Close();
+        }
+        
+    }
+   
+
+
+   
+}
